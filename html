@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>中區旅遊路線挑戰賽</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        
+        body { 
+            font-family: 'Noto Sans TC', sans-serif; 
+            touch-action: none; 
+            background: #0f172a; 
+            margin: 0;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #map { 
+            position: absolute;
+            top: 0; bottom: 0; left: 0; right: 0;
+            z-index: 1; 
+        }
+
+        .glass-panel { 
+            background: rgba(255, 255, 255, 0.95); 
+            backdrop-filter: blur(12px); 
+            border: 1px solid rgba(255, 255, 255, 0.4); 
+        }
+
+        .ui-overlay { position: fixed; z-index: 1000; pointer-events: none; }
+        .interactive { pointer-events: auto; }
+        
+        .map-control-btn {
+            @apply w-12 h-12 bg-white rounded-2xl shadow-xl flex flex-col items-center justify-center text-slate-700 hover:bg-slate-50 active:scale-90 transition-all border border-slate-200;
+        }
+        .map-control-btn.active {
+            @apply bg-indigo-600 text-white border-indigo-600 ring-4 ring-indigo-200;
+        }
+
+        .selection-panel {
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+        }
+        .selection-panel.active {
+            max-height: 800px;
+            opacity: 1;
+            margin-top: 1.5rem;
+        }
+
+        .leaflet-control-attribution { display: none !important; }
+        
+        /* 修改後的重播方框樣式：固定於底部 */
+        .replay-overlay {
+            position: fixed; 
+            inset: 0;
+            background: rgba(15, 23, 42, 0.4);
+            z-index: 3000; 
+            display: none; 
+            align-items: flex-end; 
+            justify-content: center;
+            padding-bottom: 2rem;
+        }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(100px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .replay-card {
+            animation: slideUp 0.5s cubic-bezier(0.165, 0.84, 0.44, 1) forwards;
+        }
+
+        .landmark-red { color: #e11d48; font-weight: 900; }
+        .target-hint { @apply inline-block px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded text-[10px] font-black mr-1; }
+
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.9);
+            z-index: 6000; display: none; align-items: center; justify-content: center;
+        }
+
+        .team-tab {
+            @apply cursor-pointer w-10 py-2 rounded-xl text-center border-2 transition-all shrink-0;
+        }
+        .team-tab.active {
+            @apply border-indigo-600 bg-white scale-110 shadow-lg ring-4 ring-indigo-100;
+        }
+        .team-tab.done {
+            @apply bg-emerald-50 border-emerald-200 opacity-80;
+        }
+        
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        .click-hint {
+            width: 20px; height: 20px;
+            background: rgba(79, 70, 229, 0.4);
+            border: 2px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+            position: absolute;
+            transform: translate(-50%, -50%);
+            animation: ping 0.6s cubic-bezier(0, 0, 0.2, 1) forwards;
+        }
+        @keyframes ping {
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 地圖主體 (全屏) -->
+    <div id="map"></div>
+
+    <!-- 修改後的初始選單 (簡化為直接設定) -->
+    <div id="mainMenu" class="fixed inset-0 z-[5000] bg-slate-950 flex items-center justify-center p-4">
+        <div class="max-w-md w-full bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-800 flex flex-col">
+            <div class="bg-indigo-600 p-8 text-white text-center">
+                <h1 class="text-3xl font-black tracking-tighter">📍 自由路線挑戰賽</h1>
+                <p class="text-indigo-100 text-xs mt-2 uppercase tracking-widest font-bold">Free Drawing Challenge</p>
+            </div>
+            <div class="p-10 text-center">
+                <h3 class="text-xl font-black text-slate-900 mb-2">參賽小組設定</h3>
+                <p class="text-slate-400 text-xs font-bold mb-8">請設定本次參與的小組數量</p>
+                
+                <div class="flex items-center justify-center gap-6 mb-10">
+                    <button onclick="adjustTeamCount(-1)" class="interactive w-12 h-12 rounded-full border-2 border-slate-200 flex items-center justify-center text-2xl font-black text-slate-400">-</button>
+                    <span id="teamCountInput" class="text-5xl font-black text-indigo-600">5</span>
+                    <button onclick="adjustTeamCount(1)" class="interactive w-12 h-12 rounded-full border-2 border-slate-200 flex items-center justify-center text-2xl font-black text-slate-400">+</button>
+                </div>
+
+                <button onclick="finalStart()" class="interactive w-full bg-indigo-600 text-white font-black py-4 rounded-2xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all">
+                    開始挑戰
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 左側工具欄 -->
+    <div class="ui-overlay top-1/2 -translate-y-1/2 left-4 md:left-6 flex flex-col gap-4">
+        <div class="flex flex-col gap-2 bg-white/80 p-2 rounded-3xl shadow-2xl border border-white backdrop-blur">
+            <button id="zoomInBtn" class="interactive map-control-btn !w-10 !h-10 !rounded-xl !bg-white"><span class="text-xl font-bold">+</span></button>
+            <button id="zoomOutBtn" class="interactive map-control-btn !w-10 !h-10 !rounded-xl !bg-white"><span class="text-xl font-bold">-</span></button>
+        </div>
+        <div class="flex flex-col gap-3 bg-white/80 p-2 rounded-3xl shadow-2xl border border-white backdrop-blur">
+            <button id="dragModeBtn" class="interactive map-control-btn active"><span class="text-[10px] font-black uppercase">✋</span><span class="text-[8px] font-black">拖動</span></button>
+            <button id="drawModeBtn" class="interactive map-control-btn"><span class="text-[10px] font-black uppercase">✍️</span><span class="text-[8px] font-black">描繪</span></button>
+        </div>
+    </div>
+
+    <!-- 任務情境視窗已移除 -->
+
+    <!-- 頂部切換欄 -->
+    <div class="ui-overlay top-0 left-0 right-0 p-4 md:p-6">
+        <div class="interactive w-full max-w-5xl mx-auto glass-panel rounded-[2rem] shadow-2xl p-3 md:p-4 flex items-center justify-between gap-4 border border-white/50">
+            <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shrink-0">
+                <span class="bg-slate-600 text-white px-1.5 py-0.5 rounded font-black text-[9px]">MODE</span>
+                <span id="gameTargetDisplay" class="font-black text-slate-900 text-xs md:text-sm">自由繪製模式</span>
+            </div>
+            <div class="flex items-center gap-2 overflow-x-auto pb-1 max-w-full no-scrollbar" id="teamStatusGrid"></div>
+        </div>
+    </div>
+
+    <!-- 底部操作區 -->
+    <div class="ui-overlay bottom-6 left-0 right-0 p-4 flex justify-center">
+        <div class="interactive w-full max-w-md glass-panel rounded-[2.5rem] shadow-2xl p-5 text-center border border-white/50">
+            <div class="flex justify-between items-center mb-4 px-2">
+                <div class="text-left">
+                    <p class="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Active Team</p>
+                    <h2 class="text-lg font-black text-slate-900">第 <span id="activeTeamNum">1</span> 小組</h2>
+                </div>
+                <div class="flex gap-1.5">
+                    <button id="undoBtn" class="bg-rose-50 text-rose-600 border border-rose-100 font-black px-4 py-2 rounded-xl text-[10px] hover:bg-rose-100">撤回</button>
+                    <button id="resetBtn" class="bg-slate-100 text-slate-400 font-black px-4 py-2 rounded-xl text-[10px] hover:bg-slate-200">清除</button>
+                </div>
+            </div>
+            <button id="submitBtn" class="w-full bg-slate-900 text-white font-black py-3.5 rounded-2xl shadow-xl text-sm active:scale-95 transition-all hover:bg-slate-800">儲存軌跡並完成</button>
+            <p class="mt-2 text-[9px] text-slate-400 font-bold">目前計算標準：1 步 = 0.6 米</p>
+        </div>
+    </div>
+
+    <!-- 結算動效 (Replay Overlay) -->
+    <div id="replayOverlay" class="replay-overlay">
+        <div class="replay-card interactive w-full max-w-md bg-white rounded-[2.5rem] p-6 shadow-2xl border border-white mx-4">
+            <div class="flex items-center gap-4 mb-4">
+                <div class="w-12 h-12 bg-indigo-100 rounded-2xl flex items-center justify-center shrink-0">
+                    <span class="text-xl animate-bounce">🏃</span>
+                </div>
+                <div class="text-left">
+                    <h2 class="text-lg font-black text-slate-900">軌跡重播中 (極速模式)</h2>
+                    <p class="text-slate-400 text-[10px] font-bold">正在高速計算路徑長度...</p>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <p class="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">累積距離</p>
+                    <p class="text-2xl font-black text-indigo-600"><span id="replayDist">0</span> <small class="text-xs text-indigo-400 font-bold">m</small></p>
+                </div>
+                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <p class="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">估計步數</p>
+                    <p class="text-2xl font-black text-emerald-600"><span id="replaySteps">0</span> <small class="text-xs text-emerald-400 font-bold">步</small></p>
+                </div>
+            </div>
+            
+            <div class="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                <div id="replayProgress" class="bg-indigo-500 h-full w-0 transition-all duration-300 ease-out"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 排名彈窗 -->
+    <div id="aiModal" class="hidden fixed inset-0 bg-slate-950/95 z-[6000] flex items-center justify-center p-4">
+        <div class="interactive w-full max-w-lg bg-white rounded-[3.5rem] shadow-2xl p-10 text-center mx-4">
+            <h3 class="font-black text-3xl text-slate-900 mb-4">🏆 小組賽排名揭曉</h3>
+            <p id="rankHint" class="text-slate-400 text-sm mb-8 font-bold uppercase tracking-widest">揭曉中...</p>
+            <div id="rankContainer" class="flex flex-col-reverse gap-3 mb-10 text-left"></div>
+            
+            <div class="flex flex-col gap-3">
+                <button id="revealNextBtn" class="w-full bg-indigo-600 text-white font-black py-5 rounded-2xl text-lg shadow-lg">揭曉下一名</button>
+                
+                <div id="finalActions" class="hidden flex flex-col gap-3">
+                    <button id="restartBtn" class="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-indigo-700 transition-all">重新開局 (保留組數)</button>
+                    <button onclick="location.reload()" class="w-full bg-slate-100 text-slate-500 font-black py-4 rounded-2xl hover:bg-slate-200 transition-all">回到首頁</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const START_POS = [24.1372, 120.6868];
+        const STEP_LENGTH = 0.6; 
+        const CONSTANT_SPEED = 0.32; 
+        
+        // 景點資料保留於邏輯中，但不生成地圖標點
+        const ALL_LOCS = {
+            station:  { id: 'station', name: "台中火車站", coords: [24.1372, 120.6868] }
+        };
+
+        let map, drawingPolyline, replayPolyline;
+        let isDrawing = false, isDragging = false, drawModeActive = false, currentTeamIdx = 0;
+        let totalTeams = 5;
+        let teamPaths = [], strokeHistory = [], teamData = [];
+        let currentStrokePoints = [];
+        let sortedRanks = [], currentRevealIdx = 0;
+
+        function adjustTeamCount(val) {
+            let count = parseInt(document.getElementById('teamCountInput').innerText);
+            count += val;
+            if (count < 1) count = 1;
+            if (count > 10) count = 10;
+            document.getElementById('teamCountInput').innerText = count;
+            totalTeams = count;
+        }
+
+        function finalStart() {
+            document.getElementById('mainMenu').style.display = 'none';
+            teamPaths = Array.from({ length: totalTeams }, () => []);
+            strokeHistory = Array.from({ length: totalTeams }, () => []);
+            teamData = Array.from({ length: totalTeams }, () => null);
+            initGame();
+        }
+
+        function initGame() {
+            map = L.map('map', { zoomControl: false, doubleClickZoom: false }).setView(START_POS, 17);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map);
+            drawingPolyline = L.polyline([], { color: '#4f46e5', weight: 8, opacity: 0.7, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+            replayPolyline = L.polyline([], { color: '#f59e0b', weight: 10, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+            
+            // 已取消地圖上所有標點 (L.marker/L.circleMarker 已移除)
+
+            setupControls(); bindDrawingEvents(); updateTeamGrid();
+
+            window.addEventListener('resize', () => {
+                map.invalidateSize();
+            });
+        }
+
+        function setupControls() {
+            document.getElementById('zoomInBtn').onclick = () => map.zoomIn();
+            document.getElementById('zoomOutBtn').onclick = () => map.zoomOut();
+            const dragBtn = document.getElementById('dragModeBtn');
+            const drawBtn = document.getElementById('drawModeBtn');
+            dragBtn.onclick = () => { drawModeActive = false; map.dragging.enable(); map.touchZoom.enable(); dragBtn.classList.add('active'); drawBtn.classList.remove('active'); document.getElementById('map').style.cursor = 'grab'; };
+            drawBtn.onclick = () => { drawModeActive = true; map.dragging.disable(); map.touchZoom.disable(); drawBtn.classList.add('active'); dragBtn.classList.remove('active'); document.getElementById('map').style.cursor = 'crosshair'; };
+        }
+
+        function bindDrawingEvents() {
+            function showClickHint(e) {
+                const hint = document.createElement('div');
+                hint.className = 'click-hint';
+                hint.style.left = e.clientX + 'px';
+                hint.style.top = e.clientY + 'px';
+                document.body.appendChild(hint);
+                setTimeout(() => hint.remove(), 600);
+            }
+
+            map.on('mousedown touchstart', (e) => {
+                if (!drawModeActive || e.originalEvent.target.closest('.interactive')) return;
+                isDrawing = true; 
+                isDragging = false; 
+                currentStrokePoints = [map.mouseEventToLatLng(e.originalEvent)];
+            });
+
+            map.on('mousemove touchmove', (e) => {
+                if (!isDrawing) return;
+                isDragging = true; 
+                const pt = map.mouseEventToLatLng(e.originalEvent);
+                currentStrokePoints.push(pt); 
+                drawingPolyline.addLatLng(pt);
+            });
+
+            map.on('click', (e) => {
+                if (!drawModeActive || e.originalEvent.target.closest('.interactive')) return;
+                if (!isDragging) {
+                    showClickHint(e.originalEvent);
+                    const pt = e.latlng;
+                    const history = strokeHistory[currentTeamIdx];
+                    if (history.length === 0) {
+                        history.push([pt]);
+                    } else {
+                        const lastStroke = history[history.length - 1];
+                        const lastPoint = lastStroke[lastStroke.length - 1];
+                        history.push([lastPoint, pt]);
+                    }
+                    refreshTeamPath();
+                }
+            });
+
+            const finishStroke = () => { 
+                if (isDrawing && isDragging && currentStrokePoints.length > 1) { 
+                    strokeHistory[currentTeamIdx].push([...currentStrokePoints]); 
+                    refreshTeamPath(); 
+                }
+                isDrawing = false; 
+                isDragging = false;
+            };
+
+            window.addEventListener('mouseup', finishStroke);
+            window.addEventListener('touchend', finishStroke);
+            
+            document.getElementById('undoBtn').onclick = () => { 
+                if (strokeHistory[currentTeamIdx].length > 0) { 
+                    strokeHistory[currentTeamIdx].pop();
+                    refreshTeamPath(); 
+                } 
+            };
+            
+            document.getElementById('resetBtn').onclick = () => { strokeHistory[currentTeamIdx] = []; refreshTeamPath(); };
+            document.getElementById('submitBtn').onclick = saveTeamPath;
+        }
+
+        function switchTeam(idx) {
+            currentTeamIdx = idx;
+            document.getElementById('activeTeamNum').innerText = currentTeamIdx + 1;
+            refreshTeamPath();
+            updateTeamGrid();
+            map.panTo(START_POS, { animate: true });
+        }
+
+        function refreshTeamPath() {
+            const fullPath = [].concat(...strokeHistory[currentTeamIdx]);
+            teamPaths[currentTeamIdx] = fullPath; 
+            drawingPolyline.setLatLngs(fullPath);
+            replayPolyline.setLatLngs([]);
+        }
+
+        async function saveTeamPath() {
+            if (teamPaths[currentTeamIdx].length < 2) return;
+            
+            const overlay = document.getElementById('replayOverlay');
+            overlay.style.display = 'flex';
+            
+            const path = teamPaths[currentTeamIdx];
+            replayPolyline.setLatLngs([]); 
+            let distSoFar = 0;
+            
+            drawingPolyline.setStyle({ opacity: 0.2 });
+
+            for (let i = 0; i < path.length; i++) {
+                const currentPoint = path[i];
+                replayPolyline.addLatLng(currentPoint);
+                
+                let segmentDist = 0;
+                if (i > 0) {
+                    segmentDist = L.latLng(path[i-1]).distanceTo(currentPoint);
+                    distSoFar += segmentDist;
+                }
+                
+                document.getElementById('replayDist').innerText = Math.round(distSoFar);
+                document.getElementById('replaySteps').innerText = Math.round(distSoFar / STEP_LENGTH);
+                document.getElementById('replayProgress').style.width = `${(i / (path.length - 1)) * 100}%`;
+                
+                // 減少地圖更新頻率以提升渲染效能 (每 60 點更新一次)
+                if (i % 60 === 0 || i === path.length - 1) {
+                    map.setView(currentPoint, map.getZoom(), {
+                        animate: true,
+                        pan: { duration: 0.4, easeLinearity: 0.2 } 
+                    });
+                }
+
+                // 將最小延遲降至 5ms 以實現極速回顧
+                const delay = i === 0 ? 30 : Math.max(5, segmentDist / CONSTANT_SPEED);
+                await new Promise(r => setTimeout(r, delay));
+            }
+            
+            teamData[currentTeamIdx] = { dist: distSoFar, steps: Math.round(distSoFar / STEP_LENGTH) };
+            
+            setTimeout(() => {
+                overlay.style.display = 'none';
+                replayPolyline.setLatLngs([]);
+                drawingPolyline.setStyle({ opacity: 0.7 });
+                updateTeamGrid();
+                
+                const allDone = teamData.every(d => d !== null);
+                if (allDone) {
+                    prepareRanking();
+                } else {
+                    const nextPending = teamData.findIndex((d, i) => d === null);
+                    if (nextPending !== -1) switchTeam(nextPending);
+                }
+            }, 600); // 縮短結束後的顯示停留時間
+        }
+
+        function updateTeamGrid() {
+            const grid = document.getElementById('teamStatusGrid'); grid.innerHTML = '';
+            for (let i = 0; i < totalTeams; i++) {
+                const active = currentTeamIdx === i; 
+                const done = teamData[i] !== null;
+                const statusClass = active ? 'active' : (done ? 'done' : 'pending');
+                const textClass = active ? 'text-indigo-600' : (done ? 'text-emerald-600' : 'text-slate-400');
+                
+                grid.innerHTML += `
+                    <div onclick="switchTeam(${i})" class="team-tab ${statusClass} interactive">
+                        <p class="text-[9px] font-black ${textClass}">T${i+1}</p>
+                        ${done ? '<p class="text-[8px] font-bold text-emerald-500">✓</p>' : ''}
+                    </div>`;
+            }
+        }
+
+        function prepareRanking() {
+            sortedRanks = teamData.map((d, i) => ({ team: i+1, dist: d.dist, steps: d.steps })).sort((a,b) => a.dist - b.dist); 
+            currentRevealIdx = totalTeams - 1; 
+            document.getElementById('rankContainer').innerHTML = '';
+            document.getElementById('aiModal').classList.remove('hidden');
+            document.getElementById('revealNextBtn').classList.remove('hidden');
+            document.getElementById('finalActions').classList.add('hidden');
+            document.getElementById('revealNextBtn').onclick = revealOne;
+            
+            document.getElementById('restartBtn').onclick = () => {
+                teamData = Array.from({ length: totalTeams }, () => null);
+                strokeHistory = Array.from({ length: totalTeams }, () => []);
+                teamPaths = Array.from({ length: totalTeams }, () => []);
+                document.getElementById('aiModal').classList.add('hidden');
+                switchTeam(0);
+            };
+        }
+
+        function revealOne() {
+            if (currentRevealIdx < 0) return;
+            const r = sortedRanks[currentRevealIdx];
+            const rankNum = currentRevealIdx + 1;
+            const container = document.getElementById('rankContainer');
+            let medal = '•', extraClass = 'bg-slate-50 border-slate-100';
+            if (rankNum === 1) { medal = '🥇'; extraClass = 'border-amber-400 bg-amber-50 scale-105 shadow-xl'; }
+            else if (rankNum === 2) { medal = '🥈'; extraClass = 'border-slate-300 bg-slate-100'; }
+            else if (rankNum === 3) { medal = '🥉'; extraClass = 'border-orange-200 bg-orange-50'; }
+            
+            const itemHtml = `
+                <div class="rank-item flex justify-between items-center p-5 rounded-3xl border-2 mb-2 ${extraClass}">
+                    <div class="flex items-center gap-3">
+                        <span class="text-xl">${medal}</span>
+                        <span class="font-black text-slate-800 text-sm md:text-base">第 ${rankNum} 名：第 ${r.team} 小組</span>
+                    </div>
+                    <div class="text-right">
+                        <p class="font-black text-indigo-600 text-base md:text-lg">${Math.round(r.dist)}m</p>
+                        <p class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">👣 ${r.steps} 步</p>
+                    </div>
+                </div>`;
+            container.insertAdjacentHTML('afterbegin', itemHtml);
+            
+            if (rankNum === 1) {
+                confetti({ particleCount: 200, spread: 90, origin: { y: 0.6 } });
+                document.getElementById('revealNextBtn').classList.add('hidden');
+                document.getElementById('finalActions').classList.remove('hidden');
+                document.getElementById('rankHint').innerText = '🎉 恭喜獲勝小組！';
+            } else { 
+                document.getElementById('rankHint').innerText = `已揭曉第 ${rankNum} 名`; 
+            }
+            currentRevealIdx--;
+        }
+    </script>
+</body>
+</html>
